@@ -11,20 +11,20 @@ python sec_download.py 0000320193
 
 from __future__ import annotations
 
-import argparse
-import random
-import time
-from pathlib import Path
-from typing import Iterable
+import argparse #This import is used to parse command-line arguments. This is needed to allow users to specify which tickers or CIKs they want to download data for.
+import random #This allows for generating random numbers.
+import time #This is used to pause the execution of the program for a specified amount of time, which is useful for rate limiting when making requests to the SEC API.
+from pathlib import Path #This is used to handle file paths in a way that is compatible with different operating systems.
+from typing import Iterable #This is used to specify that a function can accept any iterable object.
 
-import requests
-import yfinance as yf
+import requests #This is used to make HTTP requests to the SEC API and other endpoints to fetch data.
+import yfinance as yf  #This is used to fetch historical stock price data from Yahoo Finance.
 
 # ── Config ───────────────────────────────────────────────────────────
-DATA_DIR = Path("data")
-RAW_DIR = DATA_DIR / "raw"
-PRICE_DIR = DATA_DIR
-PRICE_SYMS = ["SPY"]
+DATA_DIR = Path("data") #Path() creates a Path object that points to the "data" directory.
+RAW_DIR = DATA_DIR / "raw" #This creates a subdirectory "raw" within the "data" directory, where raw data will be stored.
+PRICE_DIR = DATA_DIR #This creates a subdirectory "price" within the "data" directory, where price history data will be stored.
+PRICE_SYMS = ["SPY"] #This is a list of stock symbols for which price history will be downloaded. By default, it includes only the SPY ETF (S&P 500).
 
 HEADERS = {
     "User-Agent": "MarketPredictor/0.1 (matthewvarela8@gmail.com)",
