@@ -1,5 +1,10 @@
 .venv/
+.venv311/
 __pycache__/
 *.pyc
 .idea/
 .DS_Store
+
+# Generated data: rebuild with the pipeline scripts (see README)
+data/*
+!data/predictions.parquet

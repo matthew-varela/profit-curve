@@ -9,93 +9,133 @@
 # if you prefer a binary‑classification framing.
 # ============================================================================
 
-from pathlib import Path
+import os
+
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-import tensorflow as tf
-from tensorflow.keras import Sequential
-from tensorflow.keras.layers import Dense, Input
 from joblib import dump
+from sklearn.impute import SimpleImputer
+from sklearn.metrics import mean_absolute_error
+from sklearn.neural_network import MLPRegressor
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+
+from feature_config import (
+    FEATURE_COLS,
+    FEATURES_OUT,
+    MODEL_OUT,
+    PREPROCESSOR_OUT,
+    SCALER_OUT,
+    SKLEARN_MODEL_OUT,
+)
+
+try:
+    from tensorflow.keras import Sequential
+    from tensorflow.keras.layers import Dense, Dropout, Input
+
+    KERAS_AVAILABLE = True
+except ModuleNotFoundError:
+    KERAS_AVAILABLE = False
 
 # ── CONFIG ───────────────────────────────────────────────────────────
-FEATURES_IN = Path("data/features.parquet")
-MODEL_OUT   = Path("models/gold_model.keras")
-SCALER_OUT  = Path("models/feature_scaler.pkl")
-
-# ── FEATURE SELECTION ────────────────────────────────────────────────
-FEATURE_COLS = [
-    "rev_qoq",
-    "debt_equity",
-    "gross_margin",
-    "market_cap_log",  # log-scaled version added below
-]
 TARGET = "excess_ret"         # regression target (float)
+EPOCHS = int(os.getenv("EPOCHS", "50"))
 # TARGET = "label_up"         # alternative: classification (0/1)
 
 # ── LOAD FEATURES ───────────────────────────────────────────────────
 print("📥  Loading features …")
-df = pd.read_parquet(FEATURES_IN)
+df = pd.read_parquet(FEATURES_OUT)
 
-# Replace raw market_cap with log-1p to keep magnitudes reasonable (≈ 6-13)
-df["market_cap_log"] = np.log1p(df["market_cap"])
+for col in FEATURE_COLS:
+    if col not in df:
+        df[col] = np.nan
 
-# Replace ±Inf with NaN, then drop any remaining NaNs in required columns
-finite_cols = FEATURE_COLS + [TARGET]
+# Replace +/-Inf with NaN; imputation handles sparse feature families.
 df.replace([np.inf, -np.inf], np.nan, inplace=True)
-df = df.dropna(subset=FEATURE_COLS + [TARGET])
+df = df.dropna(subset=[TARGET]).copy()
+df["date"] = pd.to_datetime(df["date"], utc=True)
+df.sort_values("date", inplace=True)
 print(f"Rows after cleaning: {len(df)}")
 
-# Assert everything is finite before training
-assert np.isfinite(df[finite_cols].values).all(), "Non‑finite values still present after cleaning"
+if df.empty:
+    raise RuntimeError("No training rows with a non-null target.")
 
-# Standardize to zero-mean / unit-var — helps optimizer avoid NaNs
-scaler = StandardScaler()
-X = scaler.fit_transform(df[FEATURE_COLS]).astype(np.float32)
-# Optionally you might persist the scaler with joblib for inference
-y = df[TARGET].values.astype(np.float32)
+split_idx = max(int(len(df) * 0.8), 1)
+train_df = df.iloc[:split_idx]
+test_df = df.iloc[split_idx:]
+if test_df.empty:
+    test_df = train_df.copy()
 
-# ── TRAIN / TEST SPLIT ───────────────────────────────────────────────
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42
+preprocessor = Pipeline(
+    steps=[
+        ("imputer", SimpleImputer(strategy="median", keep_empty_features=True)),
+        ("scaler", StandardScaler()),
+    ]
 )
+X_train = preprocessor.fit_transform(train_df[FEATURE_COLS]).astype(np.float32)
+X_test = preprocessor.transform(test_df[FEATURE_COLS]).astype(np.float32)
+y_train = train_df[TARGET].values.astype(np.float32)
+y_test = test_df[TARGET].values.astype(np.float32)
+
+assert np.isfinite(X_train).all() and np.isfinite(X_test).all(), "Non-finite values after preprocessing"
 print(f"Train rows: {len(y_train)}, Test rows: {len(y_test)}")
+print(f"Model input features: {len(FEATURE_COLS)}")
 
-# ── DEFINE MODEL ────────────────────────────────────────────────────
-model = Sequential([
-    Input(shape=(X.shape[1],)),
-    Dense(64, activation="relu"),
-    Dense(32, activation="relu"),
-    Dense(1),                          # regression output
-])
-
-model.compile(
-    optimizer="adam",
-    loss="mse",
-    metrics=["mae"],
-)
-
-# ── TRAIN MODEL ─────────────────────────────────────────────────────
-print("🚀  Training model …")
-history = model.fit(
-    X_train, y_train,
-    validation_data=(X_test, y_test),
-    epochs=50,
-    batch_size=32,
-    verbose=2,
-)
-
-# ── EVALUATE MODEL ──────────────────────────────────────────────────
-print("📊  Evaluating model …")
-loss, mae = model.evaluate(X_test, y_test, verbose=0)
-print(f"Test MAE: {mae:.5f}")
-
-# ── SAVE MODEL ──────────────────────────────────────────────────────
 MODEL_OUT.parent.mkdir(parents=True, exist_ok=True)
-model.save(MODEL_OUT)
-print(f"✅  Saved model to {MODEL_OUT}")
+
+if KERAS_AVAILABLE:
+    # ── DEFINE MODEL ────────────────────────────────────────────────
+    model = Sequential([
+        Input(shape=(X_train.shape[1],)),
+        Dense(128, activation="relu"),
+        Dropout(0.20),
+        Dense(64, activation="relu"),
+        Dropout(0.10),
+        Dense(1),                          # regression output
+    ])
+
+    model.compile(
+        optimizer="adam",
+        loss="mse",
+        metrics=["mae"],
+    )
+
+    # ── TRAIN MODEL ─────────────────────────────────────────────────
+    print("🚀  Training TensorFlow/Keras model …")
+    model.fit(
+        X_train, y_train,
+        validation_data=(X_test, y_test),
+        epochs=EPOCHS,
+        batch_size=32,
+        verbose=2,
+    )
+
+    # ── EVALUATE MODEL ──────────────────────────────────────────────
+    print("📊  Evaluating model …")
+    loss, mae = model.evaluate(X_test, y_test, verbose=0)
+    print(f"Test MAE: {mae:.5f}")
+
+    model.save(MODEL_OUT)
+    print(f"✅  Saved model to {MODEL_OUT}")
+else:
+    print("TensorFlow is not installed; training sklearn MLP fallback.")
+    model = MLPRegressor(
+        hidden_layer_sizes=(128, 64),
+        activation="relu",
+        random_state=42,
+        max_iter=max(EPOCHS, 1),
+        batch_size=256,
+        early_stopping=False,
+        verbose=True,
+    )
+    model.fit(X_train, y_train)
+    preds = model.predict(X_test)
+    mae = mean_absolute_error(y_test, preds)
+    print(f"Test MAE: {mae:.5f}")
+    dump(model, SKLEARN_MODEL_OUT)
+    print(f"✅  Saved sklearn fallback model to {SKLEARN_MODEL_OUT}")
 
 # ── SAVE SCALER ─────────────────────────────────────────────────────
-dump(scaler, SCALER_OUT)
-print(f"✅  Saved scaler to {SCALER_OUT}")
+dump(preprocessor, PREPROCESSOR_OUT)
+dump(preprocessor, SCALER_OUT)
+print(f"✅  Saved preprocessor to {PREPROCESSOR_OUT}")

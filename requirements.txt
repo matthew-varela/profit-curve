@@ -42,6 +42,7 @@ requests==2.32.4
 rich==14.0.0
 scikit-learn==1.7.0
 scipy==1.15.3
+sentence-transformers
 six==1.17.0
 soupsieve==2.7
 tensorboard==2.16.2

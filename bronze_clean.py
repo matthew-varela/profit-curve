@@ -32,6 +32,21 @@ TAG_MAP: Dict[str, List[str]] = {
     "operating_cf": ["NetCashProvidedByUsedInOperatingActivities"],
     "capex": ["CapitalExpenditures"],
     "eps_diluted": ["EarningsPerShareDiluted"],
+    "cash": ["CashAndCashEquivalentsAtCarryingValue", "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"],
+    "current_assets": ["AssetsCurrent"],
+    "current_liabilities": ["LiabilitiesCurrent"],
+    "inventory": ["InventoryNet"],
+    "receivables": ["AccountsReceivableNetCurrent"],
+    "accounts_payable": ["AccountsPayableCurrent"],
+    "long_term_debt": ["LongTermDebtNoncurrent", "LongTermDebt"],
+    "interest_expense": ["InterestExpenseNonOperating", "InterestExpense"],
+    "rd_expense": ["ResearchAndDevelopmentExpense"],
+    "sga_expense": ["SellingGeneralAndAdministrativeExpense"],
+    "operating_income": ["OperatingIncomeLoss"],
+    "depreciation_amortization": ["DepreciationDepletionAndAmortization"],
+    "intangibles": ["FiniteLivedIntangibleAssetsNet", "IntangibleAssetsNetExcludingGoodwill"],
+    "goodwill": ["Goodwill"],
+    "shares_diluted": ["WeightedAverageNumberOfDilutedSharesOutstanding"],
 }
 
 KEEP_PERIODS = {"Q1", "Q2", "Q3", "Q4", "FY"}

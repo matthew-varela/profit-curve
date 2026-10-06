@@ -5,8 +5,8 @@
 #   python predict.py --features path.parquet --out preds.parquet
 #
 # The script replicates the exact preprocessing used in gold_model.py:
-#   • adds log1p(market_cap) column
-#   • applies the saved StandardScaler
+#   • selects the shared 100+ feature list
+#   • applies the saved imputer + StandardScaler pipeline
 #   • feeds the tensor into the Keras model
 #
 # It writes a parquet (or prints a sample) with columns [date, ticker, pred_excess_ret].
@@ -19,28 +19,16 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from joblib import load, dump
-import tensorflow as tf
+from joblib import load
 
-# ── DEFAULT PATHS ────────────────────────────────────────────────────
-FEATURES_DEFAULT = Path("data/features.parquet")
-MODEL_FILE       = Path("models/gold_model.keras")
-SCALER_FILE      = Path("models/feature_scaler.pkl")
-OUT_DEFAULT      = Path("data/predictions.parquet")
-
-FEATURE_COLS = [
-    "rev_qoq",
-    "debt_equity",
-    "gross_margin",
-    "market_cap_log",  # added below
-]
+from feature_config import FEATURE_COLS, FEATURES_OUT, MODEL_OUT, PREPROCESSOR_OUT, SKLEARN_MODEL_OUT
 
 # ── CLI ──────────────────────────────────────────────────────────────
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Generate predictions with the gold model")
-    p.add_argument("--features", type=Path, default=FEATURES_DEFAULT, help="Input features parquet (default data/features.parquet)")
-    p.add_argument("--out",      type=Path, default=OUT_DEFAULT,    help="Output predictions parquet (default data/predictions.parquet)")
+    p.add_argument("--features", type=Path, default=FEATURES_OUT, help="Input features parquet")
+    p.add_argument("--out",      type=Path, default=Path("data/predictions.parquet"), help="Output predictions parquet")
     p.add_argument("--latest",   action="store_true",             help="Keep only the most-recent date per ticker in output")
     return p.parse_args()
 
@@ -54,31 +42,37 @@ def main() -> None:
     df = pd.read_parquet(args.features)
 
     # 2) Pre-processing identical to training
-    df["market_cap_log"] = np.log1p(df["market_cap"])
+    for col in FEATURE_COLS:
+        if col not in df:
+            df[col] = np.nan
     df.replace([np.inf, -np.inf], np.nan, inplace=True)
-    clean = df.dropna(subset=FEATURE_COLS)
+    clean = df.copy()
     if clean.empty:
-        raise RuntimeError("No rows with complete features after cleaning — cannot predict.")
+        raise RuntimeError("No rows available after loading features.")
 
-    # 3) Load scaler and transform
-    print("🔧  Applying scaler …")
-    try:
-        scaler = load(SCALER_FILE)
-    except FileNotFoundError:
-        print(f"⚠️  Scaler file {SCALER_FILE} not found — fitting a new scaler on the fly (results may differ from training).")
-        from sklearn.preprocessing import StandardScaler
-
-        scaler = StandardScaler().fit(clean[FEATURE_COLS].astype(np.float32))
-        # persist so subsequent runs are consistent
-        SCALER_FILE.parent.mkdir(parents=True, exist_ok=True)
-        dump(scaler, SCALER_FILE)
-        print(f"✅  Saved new scaler to {SCALER_FILE}")
-    X = scaler.transform(clean[FEATURE_COLS].astype(np.float32))
+    # 3) Load preprocessor and transform
+    print("🔧  Applying saved preprocessor …")
+    preprocessor = load(PREPROCESSOR_OUT)
+    X = preprocessor.transform(clean[FEATURE_COLS]).astype(np.float32)
 
     # 4) Load model and predict
     print("🤖  Loading model …")
-    model = tf.keras.models.load_model(MODEL_FILE)
-    preds = model.predict(X, batch_size=32).flatten()
+    if MODEL_OUT.exists():
+        try:
+            import tensorflow as tf
+
+            model = tf.keras.models.load_model(MODEL_OUT)
+            preds = model.predict(X, batch_size=32).flatten()
+        except ModuleNotFoundError:
+            if not SKLEARN_MODEL_OUT.exists():
+                raise
+            model = load(SKLEARN_MODEL_OUT)
+            preds = model.predict(X).ravel()
+    elif SKLEARN_MODEL_OUT.exists():
+        model = load(SKLEARN_MODEL_OUT)
+        preds = model.predict(X).ravel()
+    else:
+        raise FileNotFoundError(f"No trained model found at {MODEL_OUT} or {SKLEARN_MODEL_OUT}")
 
     clean = clean.copy()
     clean["pred_excess_ret"] = preds
